@@ -1,0 +1,16 @@
+// Synthetic UE 5.5+ fixture, assembled independently of the parser.
+const {encryptSave}=require('../vendor/save-crypto.cjs');
+const I=n=>{const b=Buffer.alloc(4);b.writeInt32LE(n);return b;};
+const S=s=>Buffer.concat([I(Buffer.byteLength(s)+1),Buffer.from(s+'\0')]);
+const T=(name,sub=[])=>Buffer.concat([S(name),I(sub.length),...sub.map(([n,s])=>T(n,s))]);
+const P=(name,type,body,sub=[],flags=0)=>Buffer.concat([S(name),T(type,sub),I(body.length),Buffer.from([flags]),body]);
+const END=S('None');
+const big=Buffer.alloc(8);big.writeBigInt64LE(9007199254740993n);
+const player=Buffer.concat([P('currentMoney','IntProperty',I(100)),P('Counter','Int64Property',big),P('testFlag','BoolProperty',Buffer.alloc(0),[],0x10),END]);
+const inv=Buffer.concat([I(1),P('ItemId','IntProperty',I(1)),P('Num','IntProperty',I(3)),END]);
+const vision=Buffer.concat([I(1),P('ID','IntProperty',I(2001)),P('awakeningPoint','IntProperty',I(0)),P('synchroPoints','MapProperty',Buffer.concat([I(0),I(1),I(1001),I(20)]),[['IntProperty',[]],['IntProperty',[]]]),END]);
+const body=Buffer.concat([Buffer.from('GVAS'),I(3),I(0),I(0),Buffer.alloc(10),S('UE5'),I(0),I(0),S('TestSave'),Buffer.from([0]),P('Player','StructProperty',player),P('inventory','ArrayProperty',inv,[['StructProperty',[]]]),P('visionList','ArrayProperty',vision,[['StructProperty',[]]]),END]);
+const padded=Buffer.alloc(Math.ceil(body.length/16)*16);body.copy(padded);const header=Buffer.alloc(32);header.write('SVHD');header.writeUInt16LE(1,4);
+const raw=encryptSave(header,padded);
+if(require.main===module)process.stdout.write(raw);
+module.exports=raw;

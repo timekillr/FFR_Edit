@@ -1,0 +1,9 @@
+node_modules/
+dist/
+bin/
+artifacts/
+__pycache__/
+*.pyc
+*.sav
+!tests/fixture.cjs
+source-bootstrap.zip
