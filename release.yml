@@ -1,0 +1,52 @@
+name: Build and release FFR Edit
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Expand and commit initial source bundle
+        if: ${{ hashFiles('source-bootstrap.zip') != '' }}
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('source-bootstrap.zip') as archive:
+              for item in archive.infolist():
+                  path = Path(item.filename)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit('Invalid archive path')
+                  if item.is_dir() or item.filename.startswith('.github/workflows/'):
+                      continue
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(archive.read(item))
+                  path.chmod((item.external_attr >> 16) & 0o777 or 0o644)
+          PYCODE
+          git rm source-bootstrap.zip
+          git add --all
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import complete FFR Edit 0.1.0 source'
+          git push origin HEAD:main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck && npm run build && npm test && npm run test:web
+      - run: python3 scripts/fetch_node.py && npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FFR_Edit
+          path: artifacts/*
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release create "v$VERSION" artifacts/FFR_Edit.zip artifacts/SHA256SUMS --target "$(git rev-parse HEAD)" --title "FFR Edit $VERSION" --notes "Initial Decky port with Linux save discovery, staged edits, automatic/manual backups, restore, Android and LAN web pairing. Automated synthetic-save and HTTPS tests pass. Real-save in-game and Decky hardware validation is still needed; use a spare slot."
