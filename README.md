@@ -1,6 +1,6 @@
 # FFR Edit
 
-A Final Fantasy Resonance save editor for Decky Loader, Steam Deck and Linux Steam Machines. Android and local web clients use the same save service. This is an initial 0.1.0 port; it has automated synthetic-save coverage but still needs in-game validation on a real save.
+A Final Fantasy Resonance save editor for Decky Loader, Steam Deck and Linux Steam Machines. Android and local web clients use the same save service. This is an initial 0.1.1 port; it has automated synthetic-save coverage but still needs in-game validation on a real save.
 
 ## Install
 

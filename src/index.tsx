@@ -30,7 +30,7 @@ function Editor() {
   const notice=<PanelSectionRow><div style={{whiteSpace:'normal',wordBreak:'break-word',padding:8}}>{message|| (info.running?'Game is running. Close it before saving or restoring.':dirty?`${dirty} pending change(s). Save when ready.`:'All changes are backed up before writing.')}</div></PanelSectionRow>;
   const button=(text:string,onClick:()=>void,disabled=false,description?:string)=><PanelSectionRow><ButtonItem layout="below" disabled={busy||disabled} description={description} onClick={onClick}>{text}</ButtonItem></PanelSectionRow>;
   return <>
-    <PanelSection title="FFR Edit · 0.1.0">
+    <PanelSection title="FFR Edit · 0.1.1">
       <PanelSectionRow><Dropdown strDefaultLabel="Page" selectedOption={tab} rgOptions={['Saves','Editor','Backups','Connection'].map(x=>({data:x,label:x}))} onChange={x=>{setTab(x.data);setConfirm('');}} /></PanelSectionRow>
       {notice}
     </PanelSection>

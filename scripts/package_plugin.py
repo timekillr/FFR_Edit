@@ -11,7 +11,7 @@ skip={'.git','node_modules','artifacts','__pycache__'}
 with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
     for p in sorted(ROOT.rglob('*')):
         rel=p.relative_to(ROOT)
-        if p.is_file() and not p.is_symlink() and not skip.intersection(rel.parts) and p.suffix not in ('.pyc','.sav'):
+        if (not p.name.startswith('.') or p.name == '.gitignore') and p.is_file() and not p.is_symlink() and not skip.intersection(rel.parts) and p.suffix not in ('.pyc','.sav'):
             z.write(p,'ffr-edit/'+rel.as_posix())
 with zipfile.ZipFile(archive) as z:
     assert z.testzip() is None

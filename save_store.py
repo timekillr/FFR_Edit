@@ -115,7 +115,7 @@ class SaveStore:
                 saves.append({'id': sid, 'name': p.name, 'slot': slot, 'label': 'Autosave' if slot == 0 else f'Slot {slot}', 'path': str(p), 'source': source, 'mtime': info.st_mtime, 'size': info.st_size})
             except OSError:
                 continue
-        return {'saves': sorted(saves, key=lambda s: -s['mtime']), 'running': self.running(), 'message': self.message, 'version': '0.1.0'}
+        return {'saves': sorted(saves, key=lambda s: -s['mtime']), 'running': self.running(), 'message': self.message, 'version': '0.1.1'}
 
     def add_folder(self, folder):
         p = Path(folder).expanduser().resolve(strict=True)
@@ -136,7 +136,7 @@ class SaveStore:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as f:
             info = os.fstat(f.fileno())
-            if not stat.S_ISREG(info.st_mode) or not 32 < info.st_size <= MAX_SAVE:
+            if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= MAX_SAVE:
                 raise ValueError('Invalid save size or file type.')
             return f.read(MAX_SAVE + 1), info
 
@@ -188,7 +188,13 @@ class SaveStore:
 
     def open(self, sid):
         raw, _ = self.read(self.path(sid))
-        data = self.engine(raw)
+        try:
+            data = self.engine(raw)
+        except ValueError as error:
+            # Damaged current saves must not hide the recovery interface.
+            data = {'fields': [], 'items': [], 'parse_error': str(error),
+                    'warnings': ['The current save could not be decoded: ' + str(error),
+                                 'Open Backups to restore a working copy. The damaged file is preserved.']}
         # Snapshot before the user starts editing; commits also back up afresh.
         existing = self.list_backups(sid)
         if not existing or existing[0]['sha256'] != digest(raw):

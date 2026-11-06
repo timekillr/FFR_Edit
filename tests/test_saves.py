@@ -76,7 +76,17 @@ class SaveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'checksum'):self.store.restore(self.sid,doc['revision'],b['id'])
         self.assertEqual(self.path.read_bytes(),self.raw)
         self.path.write_bytes(self.raw[:-1]+bytes([self.raw[-1]^1]))
-        with self.assertRaisesRegex(ValueError,'checksum'):self.store.open(self.sid)
+        damaged=self.store.open(self.sid)
+        self.assertIn('checksum',damaged['parse_error'])
+        self.assertEqual(damaged['fields'],[])
+    def test_restore_over_truncated_current_save(self):
+        doc=self.store.open(self.sid);bid=doc['backups'][0]['id']
+        self.path.write_bytes(b'bad')
+        damaged=self.store.open(self.sid)
+        self.assertIn('parse_error',damaged)
+        restored=self.store.restore(self.sid,damaged['revision'],bid)
+        self.assertEqual(self.path.read_bytes(),self.raw)
+        self.assertTrue(restored['fields'])
     def test_backup_path_traversal(self):
         doc=self.store.open(self.sid)
         with self.assertRaises(ValueError):self.store.restore(self.sid,doc['revision'],'../elsewhere')

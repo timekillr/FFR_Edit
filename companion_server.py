@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, parse_qs
 
 expected_session = contextvars.ContextVar('companion_session', default=None)
 PROTOCOL = 1
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 PORT = 52882
 WEB_COOKIE = '__Host-FFREdit'
 WEB_ROOT = Path(__file__).resolve().parent / 'web'
