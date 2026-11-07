@@ -62,3 +62,25 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
         code=self.server.begin_pairing()['pairing_code']
         for expected in (200,403):
             status,_,_=await self.request('/v1/pair','POST',{'code':code,'device_name':'test'});self.assertEqual(status,expected)
+
+    async def test_tls_selftest_and_persistent_pairing(self):
+        self.assertTrue(self.server.status()['self_test']['ok'])
+        token=await self.pair()
+        fingerprint=self.server.fingerprint
+        port=self.server.port
+        await self.server.close()
+        await self.server.start()
+        self.assertEqual(self.server.port,port)
+        self.assertEqual(self.server.fingerprint,fingerprint)
+        self.assertTrue((await self.server.check_connection())['self_test']['ok'])
+        status,_,_=await self.request('/v1/state',headers={'Authorization':'Bearer '+token})
+        self.assertEqual(status,200)
+
+    async def test_listener_failure_is_reported(self):
+        from unittest.mock import patch
+        await self.server.close()
+        with patch('asyncio.start_server',side_effect=OSError('Address already in use')):
+            with self.assertRaisesRegex(ValueError,'Address already in use'):
+                await self.server.enable(True)
+        self.assertFalse(self.server.status()['listening'])
+        self.assertIn('Address already in use',self.server.status()['error'])

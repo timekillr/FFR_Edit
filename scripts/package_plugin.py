@@ -7,7 +7,7 @@ for name in required:
     if not (ROOT/name).is_file():raise SystemExit('Missing build input: '+name)
 out=ROOT/'artifacts';out.mkdir(exist_ok=True)
 archive=out/'FFR_Edit.zip'
-skip={'.git','node_modules','artifacts','__pycache__'}
+skip={'.git','node_modules','artifacts','__pycache__','integration'}
 with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
     for p in sorted(ROOT.rglob('*')):
         rel=p.relative_to(ROOT)

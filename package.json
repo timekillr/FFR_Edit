@@ -1,6 +1,6 @@
 {
   "name": "ffr-edit",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Final Fantasy Resonance save editor for Decky with Android and local web companions",
   "type": "module",
   "license": "GPL-3.0-only",
@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit",
     "test": "python3 -m unittest discover -s tests -v",
     "package": "python3 scripts/package_plugin.py",
-    "test:web": "node tests/web.test.mjs"
+    "test:web": "node tests/web.test.mjs",
+    "test:native": "node tests/native.test.mjs",
+    "test:integration": "node tests/web.integration.mjs",
+    "check": "npm run typecheck && npm run build && npm test && npm run test:native && npm run test:web && npm run test:integration"
   },
   "devDependencies": {
     "@decky/rollup": "1.0.2",

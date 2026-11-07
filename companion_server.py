@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, parse_qs
 
 expected_session = contextvars.ContextVar('companion_session', default=None)
 PROTOCOL = 1
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 PORT = 52882
 WEB_COOKIE = '__Host-FFREdit'
 WEB_ROOT = Path(__file__).resolve().parent / 'web'
@@ -57,6 +57,7 @@ class CompanionServer:
         self.error = None
         self.storage_error = False
         self.fingerprint = ''
+        self.self_test = None
         self.pair_code, self.pair_deadline, self.pair_attempts = '', 0, 0
         self.handlers = set()
         self.commands = OrderedDict()
@@ -122,6 +123,7 @@ class CompanionServer:
     async def start(self):
         if self.server:
             return
+        self.self_test = None
         try:
             if self.storage_error:
                 raise ValueError(self.error)
@@ -130,9 +132,47 @@ class CompanionServer:
                                                     ssl=context, limit=131072,
                                                     ssl_handshake_timeout=8)
             self.port = self.server.sockets[0].getsockname()[1]
+            await self.check_connection()
             self.error = None
         except Exception as error:
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
+                self.server = None
             self.error = str(error)
+
+    async def check_connection(self):
+        """Real TLS round trip through the listener, not a boolean socket check."""
+        self.self_test = {'ok': False, 'checked_at': time.time()}
+        if not self.server:
+            self.self_test['error'] = 'The companion server is not listening.'
+            return self.status()
+        context = ssl.create_default_context(cafile=str(self.directory / 'server.pem'))
+        context.check_hostname = False  # Trust this exact locally generated cert.
+        host = '::1' if ':' in self.host else '127.0.0.1'
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, self.port, ssl=context), 5)
+            writer.write(f'GET /v1/info HTTP/1.1\r\nHost: localhost:{self.port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'.encode())
+            await writer.drain()
+            head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 5)
+            headers = dict(line.split(':', 1) for line in head.decode().split('\r\n')[1:] if ':' in line)
+            length = int(headers.get('Content-Length', '0'))
+            if not 0 < length < 65536:
+                raise ValueError('Invalid self-test response length')
+            reply = json.loads(await asyncio.wait_for(reader.readexactly(length), 5))
+            if not reply.get('ok') or reply.get('data', {}).get('server_id') != self.config['server_id']:
+                raise ValueError('Unexpected companion identity')
+            self.self_test = {'ok': True, 'checked_at': time.time()}
+        except Exception as error:
+            self.self_test['error'] = str(error) or 'TLS self-test failed'
+            raise ValueError('Companion TLS self-test failed: ' + self.self_test['error']) from error
+        finally:
+            if writer:
+                writer.close()
+                with __import__('contextlib').suppress(OSError):
+                    await writer.wait_closed()
+        return self.status()
 
     async def enable(self, enabled):
         if not isinstance(enabled, bool):
@@ -149,6 +189,7 @@ class CompanionServer:
 
     async def close(self, cancel_commands=False):
         self.pair_code = ''
+        self.self_test = None
         if self.server:
             self.server.close()
             await self.server.wait_closed()
@@ -178,7 +219,7 @@ class CompanionServer:
         hostname = socket.gethostname()
         hostname = hostname if hostname.endswith('.local') else hostname + '.local'
         return {'enabled': self.config['enabled'], 'listening': bool(self.server), 'error': self.error,
-                'port': self.port, 'addresses': addresses, 'hostname': f'{hostname}:{self.port}',
+                'self_test': self.self_test, 'port': self.port, 'addresses': addresses, 'hostname': f'{hostname}:{self.port}',
                 'web_urls': [f'https://{address}/' for address in addresses] + [f'https://{hostname}:{self.port}/'],
                 'fingerprint': self.fingerprint, 'server_id': self.config['server_id'],
                 'pairing_code': self.pair_code if time.monotonic() < self.pair_deadline else '',
@@ -233,7 +274,7 @@ class CompanionServer:
         return device
 
     async def dispatch(self, device, data):
-        methods = {name: name for name in ('discover', 'open', 'commit', 'backup', 'backup_all', 'restore')}
+        methods = {name: name for name in ('discover', 'open', 'commit', 'backup', 'backup_all', 'restore', 'get_backups')}
         method, args, request_id = data.get('method'), data.get('args', {}), data.get('request_id')
         if not isinstance(method, str) or method not in methods or not isinstance(args, dict):
             raise ApiError(400, 'Unsupported companion command.')

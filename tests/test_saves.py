@@ -87,6 +87,66 @@ class SaveTests(unittest.TestCase):
         restored=self.store.restore(self.sid,damaged['revision'],bid)
         self.assertEqual(self.path.read_bytes(),self.raw)
         self.assertTrue(restored['fields'])
+    def test_backup_readback_and_tamper_status(self):
+        doc=self.store.open(self.sid)
+        report=doc['backup_summary']
+        self.assertTrue(report['current_revision_backed_up'])
+        self.assertEqual(report['verified'],1)
+        b=doc['backups'][0]
+        self.assertEqual(digest(Path(b['path']).read_bytes()),b['sha256'])
+        Path(b['path']).write_bytes(b'corrupt')
+        archive=self.store.get_backups(self.sid)
+        self.assertEqual(archive['backup_summary']['damaged'],1)
+        self.assertFalse(archive['backup_summary']['current_revision_backed_up'])
+        self.assertFalse(archive['backups'][0]['verified'])
+        repaired=self.store.open(self.sid)
+        self.assertTrue(repaired['backup_summary']['current_revision_backed_up'])
+        self.assertEqual(repaired['backup_summary']['verified'],1)
+        self.assertEqual(repaired['backup_summary']['damaged'],1)
+
+    def test_backup_readback_failure_aborts_save(self):
+        doc=self.store.open(self.sid)
+        original_read=self.store.read
+        def unreadable(path):
+            if self.store.backups in Path(path).parents:
+                raise OSError('Backup storage became unreadable')
+            return original_read(path)
+        with patch.object(self.store,'read',side_effect=unreadable):
+            with self.assertRaisesRegex(OSError,'read-back verification'):
+                self.store.commit(self.sid,doc['revision'],[{'path':'Player.currentMoney','v':'200'}],[])
+        self.assertEqual(self.path.read_bytes(),self.raw)
+
+    def test_unreadable_steam_home_is_reported_not_fatal(self):
+        real_is_dir=Path.is_dir
+        forbidden=self.home/'.steam/root'
+        def guarded(path):
+            if path==forbidden:raise PermissionError(13,'Permission denied')
+            return real_is_dir(path)
+        with patch.object(Path,'is_dir',guarded):
+            state=self.store.discover()
+        self.assertEqual(len(state['saves']),1)
+        self.assertTrue(state['discovery_warnings'])
+
+    def test_all_editor_sections_and_quick_actions(self):
+        doc=self.store.open(self.sid)
+        self.assertEqual({f['section'] for f in doc['fields']}, {'Records','Characters','Visions','Inventory','Artifacts','Maps','Journal','Bestiary','Other'})
+        updates=[{'path':'unitParameterList[0].HP','v':'150'},
+                 {'path':'Map.unitLocation','v':'[40,50,60]'},
+                 {'path':'Map.bIsVisited','v':False},
+                 {'path':'artifactList{0}.value.IsActive','v':False},
+                 {'path':'questProgress','v':'3'},
+                 {'path':'enemyDefeated','v':'99'},
+                 {'path':'extraCounter','v':'10'}]
+        changed=self.store.commit(self.sid,doc['revision'],updates,[{'type':'max_mastery'},{'type':'awaken'},{'type':'item','id':2,'quantity':99}])
+        values={f['path']:f['value'] for f in changed['fields']}
+        for edit in updates:
+            if edit['path']=='Map.unitLocation':self.assertEqual(json.loads(values[edit['path']]),[40,50,60])
+            else:self.assertEqual(values[edit['path']],edit['v'])
+        curves=json.loads((ROOT/'vendor/data/progression.json').read_text())
+        self.assertEqual(values['visionList[0].synchroPoints{0}.value'],str(curves['masteryMrp']['13017'][-1]))
+        self.assertEqual(values['visionList[0].awakeningPoint'],'3')
+        self.assertEqual(values['inventory[1].Num'],'99')
+
     def test_backup_path_traversal(self):
         doc=self.store.open(self.sid)
         with self.assertRaises(ValueError):self.store.restore(self.sid,doc['revision'],'../elsewhere')

@@ -74,10 +74,17 @@ class SaveStore:
         return [home / '.local/share/Steam', home / '.steam/steam', home / '.steam/root', home / '.var/app/com.valvesoftware.Steam/.local/share/Steam', home / 'snap/steam/common/.local/share/Steam']
 
     def discover(self):
+        self.discovery_warnings = []
+        def accessible_dir(path):
+            try:
+                return path.is_dir()
+            except OSError as error:
+                self.discovery_warnings.append(f'Could not scan {path}: {error.strerror or error}')
+                return False
         bases = [(Path(p), 'Custom folder') for p in self.custom]
         for home in self.homes:
             for root in self.steam_roots(home):
-                if not root.is_dir():
+                if not accessible_dir(root):
                     continue
                 libs = {root}
                 for loc in ('steamapps/libraryfolders.vdf', 'config/libraryfolders.vdf'):
@@ -88,19 +95,26 @@ class SaveStore:
                 for lib in libs:
                     local = lib / 'steamapps/compatdata/3259780/pfx/drive_c/users'
                     # Include non-default Proton user directories.
-                    bases.extend((user / 'AppData/Local/FFRS', str(lib)) for user in local.glob('*') if user.is_dir())
+                    try:
+                        bases.extend((user / 'AppData/Local/FFRS', str(lib)) for user in local.glob('*') if accessible_dir(user))
+                    except OSError as error:
+                        self.discovery_warnings.append(f'Could not scan {local}: {error}')
             bases.extend((home / folder, 'Native') for folder in ('.local/share/FFRS', '.config/FFRS'))
         found = {}
         for base, source in bases:
-            if not base.is_dir():
+            if not accessible_dir(base):
                 continue
-            for parent, dirs, files in os.walk(base, followlinks=False):
+            for parent, dirs, files in os.walk(base, followlinks=False, onerror=lambda e: self.discovery_warnings.append(str(e))):
                 if len(Path(parent).relative_to(base).parts) >= 4:
                     dirs[:] = []
                 for name in files:
                     path = Path(parent).resolve() / name
-                    if SLOT.fullmatch(name) and not path.is_symlink() and path.is_file():
-                        found[digest(str(path).encode())] = (path, source)
+                    if SLOT.fullmatch(name):
+                        try:
+                            if not path.is_symlink() and path.is_file():
+                                found[digest(str(path).encode())] = (path, source)
+                        except OSError as error:
+                            self.discovery_warnings.append(f'Could not inspect {path}: {error}')
         self.files = found
         return self.state()
 
@@ -115,7 +129,7 @@ class SaveStore:
                 saves.append({'id': sid, 'name': p.name, 'slot': slot, 'label': 'Autosave' if slot == 0 else f'Slot {slot}', 'path': str(p), 'source': source, 'mtime': info.st_mtime, 'size': info.st_size})
             except OSError:
                 continue
-        return {'saves': sorted(saves, key=lambda s: -s['mtime']), 'running': self.running(), 'message': self.message, 'version': '0.1.1'}
+        return {'saves': sorted(saves, key=lambda s: -s['mtime']), 'running': self.running(), 'message': self.message, 'version': '0.2.0', 'discovery_warnings': self.discovery_warnings}
 
     def add_folder(self, folder):
         p = Path(folder).expanduser().resolve(strict=True)
@@ -172,19 +186,48 @@ class SaveStore:
         meta = {'id': bid, 'save_id': sid, 'name': self.path(sid).name, 'created': time.time(), 'reason': reason, 'sha256': digest(raw), 'size': len(raw)}
         self.atomic(folder / (bid + '.sav'), raw)
         self.atomic(folder / (bid + '.json'), json.dumps(meta).encode())
-        return meta
+        verified = self.check_backup(folder / (bid + '.json'), sid)
+        if not verified['verified']:
+            raise OSError('Backup read-back verification failed: ' + verified['error'])
+        return verified
+
+    def check_backup(self, metadata_path, sid):
+        bid = metadata_path.stem
+        path = self.backups / sid / (bid + '.sav')
+        fallback = {'id': bid, 'save_id': sid, 'name': self.path(sid).name,
+                    'created': 0, 'reason': 'Unreadable backup', 'sha256': '', 'size': 0,
+                    'path': str(path), 'verified': False}
+        try:
+            meta = json.loads(metadata_path.read_text())
+            if (not re.fullmatch('[a-f0-9]{32}', bid) or meta.get('id') != bid or meta.get('save_id') != sid
+                    or not isinstance(meta.get('created'), (int, float)) or not isinstance(meta.get('size'), int)
+                    or not re.fullmatch('[a-f0-9]{64}', meta.get('sha256', ''))):
+                raise ValueError('Invalid backup metadata')
+            fallback.update({k: meta[k] for k in ('name', 'created', 'reason', 'sha256', 'size')})
+            raw, _ = self.read(path)
+            if len(raw) != meta['size'] or digest(raw) != meta['sha256']:
+                raise ValueError('Backup checksum mismatch')
+            return {**fallback, 'verified': True}
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return {**fallback, 'error': str(error)}
 
     def list_backups(self, sid):
         self.path(sid)
-        out = []
-        for p in (self.backups / sid).glob('*.json'):
-            try:
-                data = json.loads(p.read_text())
-                if data['save_id'] == sid and re.fullmatch('[a-f0-9]{32}', data['id']):
-                    out.append(data)
-            except (OSError, ValueError, KeyError):
-                continue
+        out = [self.check_backup(p, sid) for p in (self.backups / sid).glob('*.json')
+               if re.fullmatch('[a-f0-9]{32}', p.stem)]
         return sorted(out, key=lambda x: -x['created'])
+
+    def get_backups(self, sid, revision=None):
+        backups = self.list_backups(sid)
+        if revision is None:
+            raw, _ = self.read(self.path(sid))
+            revision = digest(raw)
+        verified = [b for b in backups if b['verified']]
+        summary = {'checked_at': time.time(), 'total': len(backups), 'verified': len(verified), 'damaged': len(backups)-len(verified),
+                   'directory': str(self.backups / sid),
+                   'latest_verified': max((b['created'] for b in verified), default=None),
+                   'current_revision_backed_up': any(b['sha256'] == revision for b in verified)}
+        return {'backups': backups, 'backup_summary': summary}
 
     def open(self, sid):
         raw, _ = self.read(self.path(sid))
@@ -197,9 +240,9 @@ class SaveStore:
                                  'Open Backups to restore a working copy. The damaged file is preserved.']}
         # Snapshot before the user starts editing; commits also back up afresh.
         existing = self.list_backups(sid)
-        if not existing or existing[0]['sha256'] != digest(raw):
+        if not any(b['verified'] and b['sha256'] == digest(raw) for b in existing):
             self.backup_raw(sid, raw, 'opened for editing')
-        return {**data, 'save_id': sid, 'revision': digest(raw), 'backups': self.list_backups(sid)}
+        return {**data, 'save_id': sid, 'revision': digest(raw), **self.get_backups(sid, digest(raw))}
 
     def backup(self, sid):
         raw, _ = self.read(self.path(sid))
@@ -210,7 +253,7 @@ class SaveStore:
         for sid in self.files:
             raw, _ = self.read(self.path(sid))
             self.backup_raw(sid, raw, 'manual all slots')
-        self.message = 'All discovered save slots backed up.'
+        self.message = f'{len(self.files)} save slots backed up and verified on disk.'
         return self.state()
 
     def replace(self, sid, revision, transform, reason):
@@ -239,6 +282,8 @@ class SaveStore:
         entries = {b['id']: b for b in self.list_backups(sid)}
         if backup_id not in entries:
             raise ValueError('Backup not found for this save slot.')
+        if not entries[backup_id]['verified']:
+            raise ValueError(entries[backup_id].get('error', 'Backup verification failed'))
         saved, _ = self.read(self.backups / sid / (backup_id + '.sav'))
         if digest(saved) != entries[backup_id]['sha256']:
             raise ValueError('Backup checksum mismatch. The save has not been touched.')
