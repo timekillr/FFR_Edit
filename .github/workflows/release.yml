@@ -12,12 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Expand and commit initial source bundle
-        if: ${{ hashFiles('source-bootstrap.zip') != '' }}
+        if: ${{ hashFiles('source-bootstrap.zip') != '' || hashFiles('source-bootstrap.b64') != '' }}
         run: |
           python3 - <<'PYCODE'
           from pathlib import Path
-          import zipfile
-          with zipfile.ZipFile('source-bootstrap.zip') as archive:
+          import zipfile, base64, io
+          bundle = Path('source-bootstrap.b64')
+          archive_bytes = base64.b64decode(bundle.read_bytes(), validate=False) if bundle.exists() else Path('source-bootstrap.zip').read_bytes()
+          with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
               for item in archive.infolist():
                   path = Path(item.filename)
                   if path.is_absolute() or '..' in path.parts:
@@ -28,16 +30,25 @@ jobs:
                   path.write_bytes(archive.read(item))
                   path.chmod((item.external_attr >> 16) & 0o777 or 0o644)
           PYCODE
-          git rm source-bootstrap.zip
+          git rm --ignore-unmatch source-bootstrap.zip source-bootstrap.b64
           git add --all
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import complete FFR Edit 0.1.0 source'
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import tested FFR Edit 0.2.0 source'
           git push origin HEAD:main
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck && npm run build && npm test && npm run test:web
+      - run: npm run check
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/checkout@v4
+        with:
+          repository: timekillr/FFR_Edit_Companion
+          path: integration/companion
+      - run: python3 scripts/test_android_transport.py --companion integration/companion
       - run: python3 scripts/fetch_node.py && npm run package
       - uses: actions/upload-artifact@v4
         with:
@@ -49,4 +60,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          gh release create "v$VERSION" artifacts/FFR_Edit.zip artifacts/SHA256SUMS --target "$(git rev-parse HEAD)" --title "FFR Edit $VERSION" --notes "Initial Decky port with Linux save discovery, staged edits, automatic/manual backups, restore, Android and LAN web pairing. Automated synthetic-save and HTTPS tests pass. Real-save in-game and Decky hardware validation is still needed; use a spare slot."
+          gh release create "v$VERSION" artifacts/FFR_Edit.zip artifacts/SHA256SUMS --target "$(git rev-parse HEAD)" --title "FFR Edit $VERSION" --notes "Fixes QAM/menu remount resets by retaining the open workspace and pending edits. Adds verified backup receipts and checksum checks, stable Connection navigation, HTTPS self-test and explicit listener errors. Release gates cover the shipped native UI against the real backend, browser HTTPS pairing/edit/restore and production Android TLS transport. Physical SteamOS/controller and your own LAN validation still need an on-device check."
